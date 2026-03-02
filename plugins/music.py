@@ -14,7 +14,7 @@ DOWNLOAD_TMP = "/tmp/musicbot_dl"
 os.makedirs(DOWNLOAD_TMP, exist_ok=True)
 
 PER_PAGE = 5
-search_cache = {}  # {user_id: [results]}
+search_cache = {}   # {user_id: {"results": [...], "query": str, "msg_id": int}}
 
 
 # ─── Keyboards ───────────────────────────────────────────────────────────────
@@ -33,7 +33,6 @@ def results_keyboard(results: list, user_id: int, page: int = 0):
             callback_data=f"sel_{user_id}_{actual_idx}_{page}"
         )])
 
-    # Navigation row
     nav = []
     if page > 0:
         nav.append(InlineKeyboardButton("◀️ Prev", callback_data=f"page_{user_id}_{page - 1}"))
@@ -52,7 +51,7 @@ def format_keyboard(user_id: int, idx: int, page: int):
             InlineKeyboardButton("🎵 MP3 Audio", callback_data=f"dl_audio_{user_id}_{idx}_{page}"),
             InlineKeyboardButton("🎬 MP4 Video", callback_data=f"dl_video_{user_id}_{idx}_{page}"),
         ],
-        [InlineKeyboardButton("🔙 Back", callback_data=f"page_{user_id}_{page}")]
+        [InlineKeyboardButton("🔙 Back to Results", callback_data=f"page_{user_id}_{page}")]
     ])
 
 
@@ -63,10 +62,12 @@ def format_keyboard(user_id: int, idx: int, page: int):
 async def music_search(client: Client, message: Message):
     not_joined = await check_force_sub(client, message.from_user.id)
     if not_joined:
+        # Reply to user's message
         await message.reply_photo(
             photo=Config.WELCOME_IMG,
             caption=script.FORCE_SUB_TXT,
-            reply_markup=force_sub_markup(not_joined)
+            reply_markup=force_sub_markup(not_joined),
+            quote=True
         )
         return
 
@@ -74,19 +75,30 @@ async def music_search(client: Client, message: Message):
     if not query or query.startswith("/"):
         return
 
-    msg = await message.reply("🔍 <b>Searching...</b>")
+    # Reply to user's search message (auto-filter style)
+    msg = await message.reply_text(
+        "🔍 <b>Searching for your song...</b>",
+        quote=True
+    )
 
     try:
         results = await search_youtube(query, max_results=10)
         if not results:
-            await msg.edit("❌ <b>No results found. Try another query.</b>")
+            await msg.edit("❌ <b>No results found.</b>\n<i>Try a different song name.</i>")
             return
 
-        search_cache[message.from_user.id] = results
+        search_cache[message.from_user.id] = {
+            "results": results,
+            "query": query,
+            "msg_id": message.id
+        }
 
         await msg.edit(
-            text=f"🎵 <b>Results for:</b> <code>{query}</code>\n"
-                 f"<i>Found {len(results)} results</i> — <b>Select a song 👇</b>",
+            text=(
+                f"🔎 <b>Results for:</b> <code>{query}</code>\n"
+                f"<i>Found {len(results)} results</i>\n\n"
+                f"<b>👇 Select a song to download</b>"
+            ),
             reply_markup=results_keyboard(results, message.from_user.id, page=0)
         )
     except Exception as e:
@@ -101,18 +113,23 @@ async def paginate(client: Client, query: CallbackQuery):
     user_id, page = int(user_id), int(page)
 
     if query.from_user.id != user_id:
-        await query.answer("Not your search!", show_alert=True)
+        await query.answer("❌ Not your search!", show_alert=True)
         return
 
-    results = search_cache.get(user_id)
-    if not results:
-        await query.answer("Session expired. Search again.", show_alert=True)
+    cache = search_cache.get(user_id)
+    if not cache:
+        await query.answer("⚠️ Session expired. Search again.", show_alert=True)
         return
 
+    results = cache["results"]
     await query.message.edit_text(
-        text=f"🎵 <b>Select a song 👇</b>  <i>(Page {page + 1})</i>",
+        text=(
+            f"🔎 <b>Results for:</b> <code>{cache['query']}</code>\n"
+            f"<b>👇 Select a song to download</b>  <i>(Page {page + 1})</i>"
+        ),
         reply_markup=results_keyboard(results, user_id, page)
     )
+    await query.answer()
 
 
 @Client.on_callback_query(filters.regex(r"^noop$"))
@@ -120,7 +137,7 @@ async def noop(client: Client, query: CallbackQuery):
     await query.answer()
 
 
-# ─── Song selected ───────────────────────────────────────────────────────────
+# ─── Song Selected ────────────────────────────────────────────────────────────
 
 @Client.on_callback_query(filters.regex(r"^sel_(\d+)_(\d+)_(\d+)$"))
 async def song_selected(client: Client, query: CallbackQuery):
@@ -128,51 +145,59 @@ async def song_selected(client: Client, query: CallbackQuery):
     user_id, idx, page = int(user_id), int(idx), int(page)
 
     if query.from_user.id != user_id:
-        await query.answer("Not your search!", show_alert=True)
+        await query.answer("❌ Not your search!", show_alert=True)
         return
 
-    results = search_cache.get(user_id, [])
-    if not results or idx >= len(results):
-        await query.answer("Session expired.", show_alert=True)
+    cache = search_cache.get(user_id)
+    if not cache or idx >= len(cache["results"]):
+        await query.answer("⚠️ Session expired.", show_alert=True)
         return
 
-    song = results[idx]
+    song = cache["results"][idx]
     await query.message.edit_text(
         text=(
             f"🎵 <b>{song['title']}</b>\n"
             f"👤 <b>Artist:</b> {song['channel']}\n"
             f"⏱️ <b>Duration:</b> {song['duration']}\n\n"
-            f"<b>Choose format 👇</b>"
+            f"<b>Choose download format 👇</b>"
         ),
         reply_markup=format_keyboard(user_id, idx, page)
     )
+    await query.answer()
 
 
-# ─── Download ────────────────────────────────────────────────────────────────
+# ─── Download ─────────────────────────────────────────────────────────────────
 
 @Client.on_callback_query(filters.regex(r"^dl_(audio|video)_(\d+)_(\d+)_(\d+)$"))
 async def do_download(client: Client, query: CallbackQuery):
     parts = query.data.split("_")
-    fmt, user_id, idx, page = parts[1], int(parts[2]), int(parts[3]), int(parts[4])
+    fmt = parts[1]
+    user_id = int(parts[2])
+    idx = int(parts[3])
+    page = int(parts[4])
 
     if query.from_user.id != user_id:
-        await query.answer("Not your session!", show_alert=True)
+        await query.answer("❌ Not your session!", show_alert=True)
         return
 
-    results = search_cache.get(user_id, [])
-    if not results or idx >= len(results):
-        await query.answer("Session expired.", show_alert=True)
+    cache = search_cache.get(user_id)
+    if not cache or idx >= len(cache["results"]):
+        await query.answer("⚠️ Session expired.", show_alert=True)
         return
 
-    song = results[idx]
+    song = cache["results"][idx]
+
     await query.message.edit_text(
-        f"⬇️ <b>Downloading</b> <code>{song['title']}</code>...\n"
+        f"⬇️ <b>Downloading...</b>\n"
+        f"🎵 <code>{song['title']}</code>\n"
         f"<i>Please wait ⏳</i>"
     )
+    await query.answer()
 
+    # Thumbnail
     thumb_path = None
     try:
-        thumb_bytes = await get_thumbnail(song["id"])
+        thumb_bytes = await get_thumbnail(song)
         if thumb_bytes:
             thumb_path = f"{DOWNLOAD_TMP}/{song['id']}_thumb.jpg"
             with open(thumb_path, "wb") as f:
@@ -185,45 +210,50 @@ async def do_download(client: Client, query: CallbackQuery):
         f"🎵 <b>{song['title']}</b>\n"
         f"👤 <b>Artist:</b> {song['channel']}\n"
         f"⏱️ <b>Duration:</b> {song['duration']}\n\n"
-        f"<b>@{me.username}</b>"
+        f"📥 <b>Downloaded via @{me.username}</b>"
     )
 
     try:
         if fmt == "audio":
-            file_path, info = await download_audio(song["url"], DOWNLOAD_TMP)
-            await client.send_audio(
-                chat_id=user_id,
+            file_path, info = await download_audio(song, DOWNLOAD_TMP)
+            # Send as reply to the results message
+            await query.message.reply_audio(
                 audio=file_path,
                 title=song["title"],
                 performer=song["channel"],
                 duration=int(info.get("duration", 0) or 0),
                 thumb=thumb_path,
-                caption=caption
+                caption=caption,
+                quote=True
             )
         else:
-            file_path, info = await download_video(song["url"], DOWNLOAD_TMP)
-            await client.send_video(
-                chat_id=user_id,
+            file_path, info = await download_video(song, DOWNLOAD_TMP)
+            await query.message.reply_video(
                 video=file_path,
                 duration=int(info.get("duration", 0) or 0),
                 width=info.get("width", 0),
                 height=info.get("height", 0),
                 thumb=thumb_path,
-                caption=caption
+                caption=caption,
+                quote=True
             )
 
         try:
             os.remove(file_path)
         except Exception:
             pass
+
+        # Delete the "downloading..." message
         await query.message.delete()
 
     except Exception as e:
         err = _clean(str(e))[:300]
         await query.message.edit_text(
-            f"❌ <b>Download failed!</b>\n<code>{err}</code>",
+            f"❌ <b>Download failed!</b>\n"
+            f"<code>{err}</code>\n\n"
+            f"<i>Try another song.</i>",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back", callback_data=f"page_{user_id}_{page}")]
+                [InlineKeyboardButton("🔙 Back to Results", callback_data=f"page_{user_id}_{page}")]
             ])
         )
     finally:
@@ -235,5 +265,4 @@ async def do_download(client: Client, query: CallbackQuery):
 
 
 def _clean(text: str) -> str:
-    """Remove ANSI color codes from yt-dlp errors."""
     return re.sub(r'\x1b\[[0-9;]*m', '', text).strip()

@@ -3,7 +3,7 @@ from datetime import datetime
 from config import Config
 
 client = AsyncIOMotorClient(Config.MONGO_URI)
-db = client["musicbot"]
+db = client["MusicBot"]  # Match exact case of existing MongoDB database
 users_col = db["users"]
 
 

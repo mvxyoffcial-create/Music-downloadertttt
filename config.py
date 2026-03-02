@@ -1,11 +1,11 @@
 import os
 
 class Config:
-    BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-    API_ID = int(os.environ.get("API_ID", 0))
-    API_HASH = os.environ.get("API_HASH", "")
-    MONGO_URI = os.environ.get("MONGO_URI", "")
-    OWNER_ID = int(os.environ.get("OWNER_ID", 7408191872))  # @Venuboyy
+    BOT_TOKEN = "8319856867:AAEW-hIKY4pqy26xMDOHd5PHhZ3hdZn1hV4"
+    API_ID = 20288994
+    API_HASH = "d702614912f1ad370a0d18786002adbf"
+    MONGO_URI = "mongodb+srv://Zerobothost:zero8907@cluster0.szwdcyb.mongodb.net/?appName=Cluster0"
+    OWNER_ID = 8498741978 # @Venuboyy
     OWNER_USERNAME = "Venuboyy"
     DEVELOPER = "@Venuboyy"
     FORCE_SUB_CHANNELS = [
